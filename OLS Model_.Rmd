@@ -1,0 +1,518 @@
+---
+title: "OLS Model Portuguese"
+author: "Gabe Vasquez"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+---
+
+```{r, echo=FALSE, message=FALSE}
+#Libraries
+library(quantreg)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(broom)
+library(MASS)
+library(car)
+```
+
+# Summary
+We fit an ordinary least squares (OLS) model to GPA using a subset of predictors chosen by AIC minimization. Our goal was to explain academic performance while avoiding mechanical predictors (G1–G3) that directly determine GPA. Diagnostic checks indicate that two core OLS assumptions—approximately normal, homoscedastic residuals—do not hold.
+
+First, the outcome’s histogram shows left-skew with a slight bimodal shape driven by a cluster of GPA = 0 cases (n = 16). Consistent with this, Q–Q plots and a Shapiro–Wilk's test on the residuals reject normality. Second, the Residuals-vs-Fitted plot displays clear fanning, indicating non-constant error variance, Groupwise variance checks using Levene/Brown–Forsythe tests provide mixed evidence—strong heterogeneity by school (p ≪ 0.001) and inconclusive results for some other factors (limited power due to class imbalance)—reinforcing the presence of heteroscedasticity.
+
+Taken together, these diagnostics question the validity of classical OLS inference for this dataset. While we can report OLS as a baseline (ideally with heteroskedasticity-robust standard errors), a distribution-robust approach such as quantile regression is better suited here: it does not require normal or equal-variance errors and allows us to quantify how predictors relate to different parts of the GPA distribution (e.g., at-risk vs. median vs. high performers).
+
+<br>
+```{r}
+# Read in dataset
+df <- read.csv("student_data.csv")
+
+# factor categorical variables
+df <- df %>%
+  mutate(across(where(is.character), as.factor)) %>% 
+  dplyr::select(-G1, -G2, -G3)
+  
+# factor 'failures'
+df$failures <- as.factor(df$failures)
+
+#str(df)
+names(df)
+```
+
+# Distribution of Response Variables
+***Student GPA's Distribution***
+```{r}
+# Distribution of the response variable GPA
+ggplot(df, aes(x = GPA)) +
+  geom_histogram(binwidth = 0.2, fill = "steelblue", color = "black") +
+  labs(title = "Distribution of Student GPA", x = "GPA", y = "Count") +
+  theme_minimal()
+```
+
+
+```{r}
+# Compute quantiles and mean
+gpa_quantiles <- quantile(df$GPA, probs = c(0.1, 0.5, 0.9))
+gpa_mean <- mean(df$GPA)
+
+# Create a data frame for vertical lines
+vline_data <- data.frame(
+  xintercept = c(
+    gpa_quantiles["10%"], gpa_quantiles["50%"], gpa_quantiles["90%"], gpa_mean
+  ),
+  Label = factor(c(
+    "10% Quantile", "Median (50%)", "90% Quantile", "Mean"
+  ),
+  levels = c("Mean", "Median (50%)", "10% Quantile", "25% Quantile", "75% Quantile", "90% Quantile"))
+)
+
+# Plot
+ggplot(df, aes(x = GPA)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.1, fill = "gray", color = "black", alpha = 0.5) +
+  geom_density(color = "black", size = 1.2) +
+  
+  # Add vlines with mapped aesthetics for legend
+  geom_vline(data = vline_data, aes(xintercept = xintercept, color = Label, linetype = Label), size = 1.2) +
+  
+  scale_color_manual(values = c(
+    "Mean" = "green",
+    "Median (50%)" = "red",
+    "10% Quantile" = "purple",
+    "90% Quantile" = "purple"
+  )) +
+  
+  scale_linetype_manual(values = c(
+    "Mean" = "dotdash",
+    "Median (50%)" = "solid",
+    "10% Quantile" = "dashed",
+    "90% Quantile" = "dashed"
+  )) +
+  
+  labs(
+    title = "Density Distribution of Student GPA",
+    x = "GPA",
+    y = "Density",
+    color = "Statistic",
+    linetype = "Statistic"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+round(mean(df$GPA), 3) 
+round(median(df$GPA), 3)
+```
+GPA mean < median $\rightarrow$ GPA distribution follows more of a left-skewed distribution. But, they're so close that we could almost say this distribution is normal. Later, a Shaprio-Wilk's test will tell if the OLS model's distribution is normal or not.
+
+# Fit OLS Model
+```{r}
+# Initialize models
+null_model <- lm(GPA ~ 1, data = df)
+full_model <- lm(GPA ~ ., data = df)
+```
+
+```{r}
+# Variable selection
+stepAIC_model <- stepAIC(null_model, scope = list(lower = null_model, upper = full_model), direction = "both", trace = FALSE)
+summary(stepAIC_model)
+```
+
+```{r}
+# Confindence intevals of Beta Coefficients
+tidy_model <- tidy(stepAIC_model, conf.int = TRUE)
+tidy_model
+```
+
+```{r}
+ggplot(tidy_model, aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(
+    title = "Coefficient Estimates with 95% Confidence Intervals",
+    x = "Estimate",
+    y = "Predictor"
+  )
+
+```
+<br>
+Exclude internet, romantic, health, and age because they have a possibility of actually being insignificant at explaining the variability in a student's GPA.
+
+```{r}
+ols_model <- lm(GPA ~ Walc + studytime + sex + schoolsup + school + higher + Fedu + failures + absences, data = df)
+summary(ols_model)
+```
+
+
+# Assumptions Check
+## Normality check
+```{r}
+res <- resid(ols_model)
+
+res_quantiles <- quantile(res, probs = c(0.10, 0.50, 0.90), na.rm = TRUE)
+res_mean <- mean(res, na.rm = TRUE)
+
+vline_data <- data.frame(
+  xintercept = c(res_mean, res_quantiles["50%"], res_quantiles["10%"], res_quantiles["90%"]),
+  Label = factor(c("Mean", "Median (50%)", "10% Quantile", "90% Quantile"),
+                 levels = c("Mean","Median (50%)","10% Quantile","90% Quantile"))
+)
+
+# Build a small data frame for ggplot
+res_df <- data.frame(residuals = res)
+
+ggplot(res_df, aes(x = residuals)) +
+  geom_histogram(aes(y = after_stat(density)), binwidth = 0.1,
+                 fill = "gray", color = "black", alpha = 0.5) +
+  geom_density(linewidth = 1.2) +
+  geom_vline(data = vline_data,
+             aes(xintercept = xintercept, color = Label, linetype = Label),
+             linewidth = 1.2) +
+  scale_color_manual(values = c("Mean"="green","Median (50%)"="red",
+                                "10% Quantile"="purple","90% Quantile"="purple")) +
+  scale_linetype_manual(values = c("Mean"="dotdash","Median (50%)"="solid",
+                                   "10% Quantile"="dashed","90% Quantile"="dashed")) +
+  labs(title = "Density of OLS Model Residuals",
+       x = "Residual", y = "Density", color = "Statistic", linetype = "Statistic") +
+  theme_minimal()
+
+```
+
+```{r}
+mean(res_df$residuals) 
+median(res_df$residuals)
+```
+OLS Model residuals' mean > median. (Right-Skewed).
+
+```{r}
+qqnorm(resid(ols_model))
+qqline(resid(ols_model))
+```
+
+```{r}
+# Shapiro-Wilk normality test
+shapiro.test(resid(ols_model))
+# Ho: Sample data comes from a normal distribution
+```
+(P-value = 2.067e-05) < ($\alpha$ = 0.05) $\Rightarrow$ Reject the null because the Shaprio-Wilk's test confirms a statistically significant difference from normality. The density visual suggests a right-skewed distribution. 
+
+## Constant Variance Check
+### Fitted vs Residual
+```{r}
+ggplot(data = ols_model, aes(x = .fitted, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals") +
+  ggtitle("Residuals vs Predicted Values")
+
+```
+<br>
+Variance(spread) of residuals does not appear constant - clustering around (2.5, 0).
+
+### Failures vs Residuals
+```{r}
+ggplot(data = ols_model, aes(x = failures, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+```
+
+```{r}
+boxplot(resid(ols_model) ~ df$failures, main = "Residuals by failures", ylab = "Residuals")
+```
+
+```{r}
+# Levene's Test
+# Used to check whether goups (levels) have equal variance. 
+# H0: the residual variance of 2(or more) groups are equal (homogeneity of variance) vs Ha: at least one group has different residuals variance.
+leveneTest(resid(ols_model) ~ model.frame(ols_model)$failures)
+```
+<br>
+Levene's test reports ($p-value=0.4087$) > ($\alpha$=0.05). This suggests that there is not enough evidence to reject the Null. Therefore, we do not detect variance difference across the different failures. There is a possibility that variance is constant.
+
+```{r}
+prop.table(table(df$failures))
+```
+Levene's test may not be robust to this imbalanced behavior. There's no evidence of variance difference, but the power behind this claim may be limited due to small groups. 
+
+### Walc vs Residuals
+```{r}
+ggplot(data = ols_model, aes(x = Walc, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+
+```
+There is a slight funnel pattern (from left to right). 
+
+### Studytime vs Residuals
+```{r}
+ggplot(data = ols_model, aes(x = studytime, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+```
+<br>
+Variance does not appear constant across the plot.
+
+### Sex vs Residuals
+```{r}
+ggplot(data = ols_model, aes(x = sex, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+```
+
+```{r}
+boxplot(resid(ols_model) ~ df$sex, main = "Residuals by Sex", ylab = "Residuals")
+```
+
+```{r}
+# Levene's Test
+leveneTest(resid(ols_model) ~ model.frame(ols_model)$sex)
+```
+Levene's test reports ($p-value=0.5136$) > ($\alpha$=0.05). This suggests that there is not enough evidence to reject the Null. Therefore, we do not detect variance difference between the two different sexes. There is a possibility that variance is constant.
+
+```{r}
+prop.table(table(df$sex))
+```
+Due to this imbalanced behavior, Levene's power may be limited.
+
+### Schoolsup vs Residauls
+```{r}
+ggplot(data = ols_model, aes(x = schoolsup, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+```
+
+```{r}
+boxplot(resid(ols_model) ~ df$schoolsup, main = "Residuals by School", ylab = "Residuals")
+```
+
+```{r}
+# Levene's Test
+leveneTest(resid(ols_model) ~ model.frame(ols_model)$schoolsup)
+```
+Levene's test reports ($p-value=0.2003$) > ($\alpha$=0.05). This suggests that there is not enough evidence to reject the Null. Therefore, we do not detect variance difference between the groups in school support. There is a possibility that variance is constant.
+
+```{r}
+prop.table(table(df$schoolsup))
+```
+Due to this very unbalance behavior, Levene's power may be limited. 
+
+### School vs Residauls
+```{r}
+ggplot(data = ols_model, aes(x = school, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+```
+
+```{r}
+boxplot(resid(ols_model) ~ df$school, main = "Residuals by School", ylab = "Residuals")
+```
+
+```{r}
+# Levene's Test
+leveneTest(resid(ols_model) ~ model.frame(ols_model)$school)
+```
+Levene's test suggest that the residual variance is not equal across the two different school groups - this matches with the plots. Therefore, we conclude that the constant variance assumption is not satisfied. 
+
+### Fedu vs Residuals
+```{r}
+ggplot(data = ols_model, aes(x = Fedu, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+```
+Variance does not appear constant across all levels of father's education.
+
+### Absences vs Residuals
+```{r}
+ggplot(data = ols_model, aes(x = absences, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+```
+There appears to be a funnel-like pattern. Constant variance assumption is not satisfied.
+
+
+# Fit an OLS Model without Zero GPA Students
+```{r}
+# Compute IQR boundaries
+Q1 <- quantile(df$GPA, 0.25, na.rm = TRUE)
+Q3 <- quantile(df$GPA, 0.75, na.rm = TRUE)
+IQR_value <- Q3 - Q1
+
+# Thresholds (1.5 * IQR rule)
+lower_bound <- Q1 - 1.5 * IQR_value
+upper_bound <- Q3 + 1.5 * IQR_value
+
+# Remove outliers (removing students with GPA=0)
+df_no_outliers <- df[df$GPA >= lower_bound & df$GPA <= upper_bound, ]
+
+summary(df_no_outliers$GPA)
+n_removed <- nrow(df) - nrow(df_no_outliers)
+cat("Number of outliers removed:", n_removed)
+```
+
+```{r}
+# Compute quantiles and mean
+gpa_quantiles <- quantile(df_no_outliers$GPA, probs = c(0.1, 0.5, 0.9))
+gpa_mean <- mean(df_no_outliers$GPA)
+
+# Create a data frame for vertical lines
+vline_data <- data.frame(
+  xintercept = c(
+    gpa_quantiles["10%"], gpa_quantiles["50%"], gpa_quantiles["90%"], gpa_mean
+  ),
+  Label = factor(c(
+    "10% Quantile", "Median (50%)", "90% Quantile", "Mean"
+  ),
+  levels = c("Mean", "Median (50%)", "10% Quantile", "90% Quantile"))
+)
+
+# Plot
+ggplot(df_no_outliers, aes(x = GPA)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.1, fill = "gray", color = "black", alpha = 0.5) +
+  geom_density(color = "black", size = 1.2) +
+  
+  # Add vlines with mapped aesthetics for legend
+  geom_vline(data = vline_data, aes(xintercept = xintercept, color = Label, linetype = Label), size = 1.2) +
+  
+  scale_color_manual(values = c(
+    "Mean" = "green",
+    "Median (50%)" = "red",
+    "10% Quantile" = "purple",
+    "90% Quantile" = "purple"
+  )) +
+  
+  scale_linetype_manual(values = c(
+    "Mean" = "dotdash",
+    "Median (50%)" = "solid",
+    "10% Quantile" = "dashed",
+    "90% Quantile" = "dashed"
+  )) +
+  
+  labs(
+    title = "Distribution of GPA with Mean, Median, and Quantiles",
+    x = "GPA",
+    y = "Density",
+    color = "Statistic",
+    linetype = "Statistic"
+  ) +
+  theme_minimal()
+```
+
+## Fit OLS Model 2
+```{r}
+# Initialize models
+null_model2 <- lm(GPA ~ 1, data = df_no_outliers)
+Full_model2 <- lm(GPA ~ ., data = df_no_outliers)
+#summary(Full_model2)
+```
+
+```{r}
+# Variable selection
+stepAIC_model2 <- stepAIC(null_model2, scope = list(lower = null_model2, upper = Full_model2), direction = "both", trace = FALSE)
+summary(stepAIC_model2)
+```
+
+```{r}
+# Confindence intervals of Beta Coefficients
+tidy_model2<- tidy(stepAIC_model2, conf.int = TRUE)
+tidy_model2
+```
+
+```{r}
+ggplot(tidy_model2, aes(x = estimate, y = term)) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+  theme_minimal() +
+  labs(
+    title = "Coefficient Estimates with 95% Confidence Intervals",
+    x = "Estimate",
+    y = "Predictor"
+  )
+
+```
+<br>
+Exclude health, higher education, guardian, gout, Fjob, Dalc, and activities because they have a possibility of actually being insignificant to explaining the variability in a student's GPA.
+
+```{r}
+ols_model2 <- lm(GPA ~ studytime + sex + schoolsup + school + Medu + higher + failures + age + absences,data = df_no_outliers)
+summary(ols_model2)
+```
+
+
+## Assumptions Check
+### Normality check
+```{r}
+res2 <- resid(ols_model2)
+
+res2_quantiles <- quantile(res2, probs = c(0.10, 0.50, 0.90), na.rm = TRUE)
+res2_mean <- mean(res2, na.rm = TRUE)
+
+vline_data2 <- data.frame(
+  xintercept = c(res2_mean, res2_quantiles["50%"], res2_quantiles["10%"], res2_quantiles["90%"]),
+  Label = factor(c("Mean", "Median (50%)", "10% Quantile", "90% Quantile"),
+                 levels = c("Mean","Median (50%)","10% Quantile","90% Quantile"))
+)
+
+# Build a small data frame for ggplot
+res2_df <- data.frame(residuals = res2)
+
+ggplot(res2_df, aes(x = residuals)) +
+  geom_histogram(aes(y = after_stat(density)), binwidth = 0.1,
+                 fill = "gray", color = "black", alpha = 0.5) +
+  geom_density(linewidth = 1.2) +
+  geom_vline(data = vline_data2,
+             aes(xintercept = xintercept, color = Label, linetype = Label),
+             linewidth = 1.2) +
+  scale_color_manual(values = c("Mean"="green","Median (50%)"="red",
+                                "10% Quantile"="purple","90% Quantile"="purple")) +
+  scale_linetype_manual(values = c("Mean"="dotdash","Median (50%)"="solid",
+                                   "10% Quantile"="dashed","90% Quantile"="dashed")) +
+  labs(title = "Density of OLS Model 2 Residuals",
+       x = "Residual", y = "Density", color = "Statistic", linetype = "Statistic") +
+  theme_minimal()
+
+```
+
+```{r}
+mean(res2_df$residuals) 
+median(res2_df$residuals) 
+```
+The OLS Model 2 residuals' mean > median. (Right-Skewed).
+
+```{r}
+qqnorm(resid(ols_model2))
+qqline(resid(ols_model2))
+```
+
+```{r}
+# Shapiro-Wilk normality test
+shapiro.test(resid(ols_model2))
+# Ho: Sample data comes from a normal distribution
+```
+(P-value = 0.002285) < ($\alpha$ = 0.05) $\Rightarrow$. Reject the null because the Shaprio-Wilk's test confirms a statistically significant difference from normality. The density visual suggests a right-skewed distribution. 
+
+## Constant Variance Check
+### Fitted vs Residual
+```{r}
+ggplot(data = ols_model2, aes(x = .fitted, y = .resid)) +
+  geom_point(alpha = 1) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predicted Values", y = "Residuals")
+```
+<br>
+Variance(spread) of residuals does not appear constant. <br>
+Removing zeros improved fit, but it did not fix assumptions.
