@@ -1,0 +1,221 @@
+---
+title: "EDA_Portuguese_Students"
+author: "Gabe Vasquez"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, echo=FALSE}
+# Load required libraries
+suppressWarnings(suppressMessages(library(dplyr)))
+suppressWarnings(suppressMessages(library(tidyverse)))
+suppressWarnings(suppressMessages(library(skimr)))
+suppressWarnings(suppressMessages(library(ggplot2)))
+suppressWarnings(suppressMessages(library(GGally)))
+suppressWarnings(suppressMessages(library(ggcorrplot)))
+```
+
+# Summary
+There are 649 total students with 33 variables. <br> 
+The response variable is GPA (continuous). <br>
+There are 16 numerical variables and 17 categorical variables. <br>
+
+Our variables of interest are: <br>
+-Numerical variables: G1, G2, and Failures <br>
+-Categorical variables: Absences, Medu, Fedu, Studytime <br>
+
+Others that showed potential from the their figures:
+School, Mjob, Fjob, Reason, Guardian, Higher, Schoolsup <br>
+
+From the scatterplots(_similar as Math students_):
+
+    GPA vs G2 and G1: G2 shows the strongest linear relationship with GPA, followed by G1. Quantile regression may reveal whether G1 predicts GPA more strongly at higher quantiles and help identify if G2’s influence varies across different GPA levels.
+
+    GPA vs Failures: GPA generally decreases as the number of failures increases. Students with zero failures have a wide spread of GPAs, while students with 2–3 failures cluster around a GPA of 2.0 or lower.
+
+    GPA vs Absences: The relationship is nonlinear. Most students have 20 or fewer absences, but there are about 15 extreme outliers. Since quantile regression handles outliers well, we will keep these outliers and not transform the variable until after evaluating the regression results.
+    
+    GPA vs Absences: The relationship is nonlinear. Most students have 15 or fewer absences, but there are 21 extreme outliers. Since quantile regression handles outliers well, we will keep these outliers and not transform the variable until after evaluating the regression results. <br>
+    
+From the boxplots: <br>
+
+    GPA vs School: Students at the Gabriel Pereira (GP) school has a much higher median GPA than the students at the Mousinho da Silveira (MS) school. Perhaps the matters more for struggling students and less for higher performing students. Our quantile regression can show if low-GPA students at GP still outperform MS students as the same low quantiles (0.1 to 0.25). <br>
+    
+    GPA vs Mjob: There is difference in GPA Medians across the students' mother's job categories. The categoris "at_home", "health", and "teacher" appear a little more distorted. Student's with mothers working in health or teaching tend to do better in school than the other professions. A mother's job occupation might lift lower GPA students(quantile: 0.1 to 0.25) more or sustain better performaning students (quantile: 0.75). <br>
+    
+    GPA vs Fjob: Of the 5 groups in the father's job category, two of them have different GPA medians than the others. This suggests that students with fathers working in "at_home" jobs tend to poorly perform more than all other students with fathers not working at "at_home". And, it suggests that students with fathers working as "teachers" tend to better perform than all other students with fathers not working as "teachers". A father's occupation could help mid- to high-peformning students more than low-performing students. Our quantile regression should helps us uncover these non-constant effects across GPA scores.
+    
+    GPA vs Reason: The GPA median is different across all 4 groups. Students who choose to got to school for "reputation" reasons tend to perform better than the other students. 
+    
+    GPA vs Schoolsup: This is interesting - students WITHOUT extra educational support tend to perform bettern than students receiving support. Perhaps students who are offered support are already struggling(low GPA quantile). Quantile regression may show include schoolsup. 
+    
+    GPA vs Higher: Students with desireto attend higher education tend to outperform students who do not. We can think of this as students who are planning to pursue higher education are performing better to sustain high GPAs to be qualified. 
+
+From the EDA, our desired model appears to be:
+$$
+GPA = B_0 + B_1(G1) + B_2(G2) + B_3(Failures) + B_4(Absences) + B_5(School) + B_6(Mjob) + B_7(Fjob) + B_8(Reason) + B_9(Schoolsup) + B_{10}(Higher)
+$$
+Next, we'll use the stepwise method to help generate a list of variables that are most important to this dataset. <br>
+
+***Note*** Again, there is imbalance in the categorical variables. But quantile regression should be able to handle imbalanced groups within categorical variables. We just to be mindful that the quantile estimates for the small group may not be accurate. <br> 
+```{r}
+# Load the data from CSV files
+port_students <- read.csv("student-por.csv", sep=";", header=TRUE)
+```
+
+```{r}
+# Generate GPA. Round GPA to 2 decimal place.
+port_students <- port_students %>%
+  mutate(GPA = (G3 / 20) * 4)
+
+port_students <- port_students %>%
+  mutate(GPA = round(GPA, 2))
+
+head(port_students)
+
+```
+
+
+# Portuguese Language Students
+
+## General Data Structure and Summary 
+```{r}
+# General structure and summary 
+str(port_students)
+glimpse(port_students)
+skimr::skim(port_students)
+```
+
+```{r}
+# Check for missing values 
+missing_counts <- colSums(is.na(port_students))
+print(missing_counts[missing_counts > 0])
+```
+There are no missing values in this dataset.
+
+```{r}
+# Summary statistics for numeric variables 
+summary(select(port_students, where(is.numeric)))
+```
+
+## Distribution of Response Variable
+```{r, echo=FALSE}
+# Distribution of the response variable G3 
+ggplot(port_students, aes(x = G3)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black") +
+  labs(title = "Distribution of Final Grade (G3)", x = "G3", y = "Count") +
+  theme_minimal()
+
+# Distribution of the response variable GPA
+ggplot(port_students, aes(x = GPA)) +
+  geom_histogram(binwidth = 0.2, fill = "steelblue", color = "black") +
+  labs(title = "Distribution of Final GPA", x = "GPA", y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+# Check for outliers
+boxplot(port_students$GPA, main="Boxplot with Outliers")
+iqr <- IQR(port_students$GPA)
+lower <- quantile(port_students$GPA, 0.25) - 1.5 * iqr
+upper <- quantile(port_students$GPA, 0.75) + 1.5 * iqr
+outliers <- port_students$GPA[port_students$GPA < lower | port_students$GPA > upper]
+
+print(outliers)
+
+length(outliers)
+```
+There are 16 extreme outliers in GPA. GPA also does not follow the traditional normal distribution. In linear regression approach the idea would be to expect to remove these 16 outliers from the dataset. However, in our quantile regression approach, let's see if we gain insights into these extreme students with very low GPA scores.
+
+
+## Correlations
+```{r, echo=FALSE, warning=FALSE}
+# Boxplots for outlier detection 
+port_students %>%
+  dplyr::select(where(is.numeric)) %>%
+  pivot_longer(cols = everything()) %>%
+  ggplot(aes(x = name, y = value)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(title = "Boxplots of Numeric Variables") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Correlation matrix among numeric variables 
+numeric_port_students <- select(port_students, where(is.numeric))
+cor_matrix <- cor(numeric_port_students)
+
+# Plot using ggcorrplot
+ggcorrplot(cor_matrix,
+           method = "square",
+           type = "lower",
+           lab = TRUE,
+           lab_size = 3,
+           tl.cex = 10,             # Axis text size
+           tl.srt = 45,             # Rotate axis labels for better readability
+           colors = c("blue", "white", "red"),
+           title = "Correlation Matrix of Numeric Variables")
+
+```
+
+## Relationships with GPA
+```{r, echo=FALSE, warning=FALSE}
+# Continuous predictors vs. GPA
+numeric_predictors <- names(port_students)[sapply(port_students, is.numeric) & names(port_students) != "GPA"]
+for (var in numeric_predictors) {
+  print(
+    ggplot(port_students, aes_string(x = var, y = "GPA")) +
+      geom_point(alpha = 0.5) +
+      geom_smooth(method = "loess") +
+      labs(title = paste("GPA vs", var)) +
+      theme_minimal()
+  )
+}
+
+# Categorical predictors vs. GPA
+categorical_vars <- names(port_students)[sapply(port_students, is.factor) | sapply(port_students, is.character)]
+for (var in categorical_vars) {
+  print(
+    ggplot(port_students, aes_string(x = var, y = "GPA")) +
+      geom_boxplot(fill = "tan") +
+      labs(title = paste("GPA by", var)) +
+      theme_minimal()
+  )
+}
+
+# Frequency tables for categorical variables
+for (var in categorical_vars) {
+  print(table(port_students[[var]]))
+}
+```
+
+```{r}
+# Checking for outliers in absences variable
+Q1 <- quantile(port_students$absences, 0.25)
+Q3 <- quantile(port_students$absences, 0.75)
+IQR_value <- IQR(port_students$absences)
+lower_bound <- Q1 - 1.5 * IQR_value # returns -9, but this can be represented as 0.
+upper_bound <- Q3 + 1.5 * IQR_value # 15
+which(port_students$absences < lower_bound | port_students$absences > upper_bound) # returns indices
+
+print("These are the extreme outliers in absences:") 
+port_students$absences[which(port_students$absences < lower_bound | port_students$absences > upper_bound)]
+# 21 extreme outliers
+```
+
+We may need to perform log transformation. We'll evaluate its quantile regression results before any transformation.
+
+## Pairwise relationships
+```{r, warning=FALSE}
+# This can be slow on large datasets
+#GGally::ggpairs(port_students[, c("GPA", "studytime", "failures", "absences")])
+```
+
+
+```{r}
+# Write data to csv file
+port_students <- port_students %>% dplyr::select(-G3) # remove G3
+write.csv(port_students, "port_students_revised.csv", row.names = FALSE)
+```
