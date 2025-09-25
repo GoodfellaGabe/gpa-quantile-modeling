@@ -2,9 +2,9 @@
 Quantile regression analysis of student GPA performance across demographic, academic, and family features. Demonstrates OLS vs Quantile Regression inference and distributional heterogeneity.
 
 ## 📌 Project Overview
-This project applies **quantile regression** to analyze high school student performance (GPA) using demographic, academic, and family background features. The motivation is to understand **which student characteristics most strongly influence GPA**—and how those effects differ across the **low (10%), middle (50%), and high (90%) quantiles** of the GPA distribution.  
+This project applies **quantile regression** to analyze high school student performance (GPA) using demographic, academic, and family background features. The motivation is to understand which student characteristics most strongly influence GPA —and how those effects differ across the low (10%), middle (50%), and high (90%) quantiles of the GPA distribution.  
 
-Unlike OLS, which models only the mean, quantile regression reveals **distributional heterogeneity**, making it more robust in the presence of skewed GPA data and heteroskedastic residuals.
+Unlike OLS, which models only the mean, quantile regression reveals distributional heterogeneity, making it more robust in the presence of skewed GPA data and heteroskedastic residuals.
 
 ---
 
